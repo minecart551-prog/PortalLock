@@ -180,9 +180,9 @@ public final class PortalLockLang {
 
     private static String upgradeLegacyValue(String key, String value, String defaultValue) {
         if (value == null) return defaultValue == null ? "" : defaultValue;
-        String plain = value.replace("&e", "").replace("&d", "").replace("&c", "").replace("&f", "").replace("§e", "").replace("§d", "").replace("§c", "").trim();
-        if (("nether-denied".equals(key) || "end-denied".equals(key)) && !value.contains("&") && defaultValue != null) {
-            if (plain.contains("%item%") || plain.contains("Glowstone") || plain.contains("End Crystal")) return defaultValue;
+        if ("blocked-denied".equals(key) && defaultValue != null) {
+            String plain = value.replace("&c", "").replace("&e", "").replace("§c", "").replace("§e", "").trim();
+            if (!value.contains("&") && plain.contains("%item%")) return defaultValue;
         }
         return value;
     }
@@ -191,12 +191,10 @@ public final class PortalLockLang {
         Map<String, String> map = new LinkedHashMap<>();
         switch (normalizeLocale(locale)) {
             case "ja_jp" -> {
-                map.put("nether-denied", "&eネザーに入るには&c%item%&eが必要です！");
-                map.put("end-denied", "&dエンドに入るには&c%item%&dが必要です！");
+                map.put("blocked-denied", "&c&c%item%&cを持っている間は入場できません！");
             }
             default -> {
-                map.put("nether-denied", "&eYou need &c%item%&e to enter the Nether!");
-                map.put("end-denied", "&dYou need &c%item%&d to enter the End!");
+                map.put("blocked-denied", "&cYou cannot enter while carrying &e%item%&c!");
             }
         }
         return map;

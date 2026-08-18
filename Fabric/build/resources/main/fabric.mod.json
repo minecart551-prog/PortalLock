@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "portal-lock",
+  "version": "1.2.0",
+  "name": "Portal Lock",
+  "description": "Blocks portal entry when carrying certain items.",
+  "authors": [
+    "pinecraft77"
+  ],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/portal-lock/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.example.portallock.PortalLockMod"
+    ]
+  },
+  "mixins": [
+    "portal-lock.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "fabric": "*",
+    "minecraft": ">=1.20",
+    "java": ">=17"
+  },
+  "custom": {
+    "modmenu": {
+      "links": {
+        "modmenu.portal-lock.modrinth": "https://modrinth.com/mod/portal-lock",
+        "modmenu.portal-lock.curseforge": "https://www.curseforge.com/minecraft/mc-mods/portal-lock"
+      }
+    }
+  }
+}

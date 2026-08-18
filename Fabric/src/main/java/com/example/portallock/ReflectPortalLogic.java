@@ -18,7 +18,8 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.lang.reflect.Field;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Locale;
@@ -57,8 +58,6 @@ public final class ReflectPortalLogic {
     private static final long NETHER_RETURN_SILENT_MS = 3000L;
     private static final Map<UUID, Long> NETHER_RETURN_SILENT_UNTIL = new HashMap<>();
     private static final Map<UUID, Integer> NETHER_RETURN_MISS_TICKS = new HashMap<>();
-    private static final Map<UUID, Integer> PENDING_END = new HashMap<>();
-    private static final Map<UUID, Integer> PENDING_NETHER = new HashMap<>();
 
     private ReflectPortalLogic() {}
 
@@ -67,14 +66,7 @@ public final class ReflectPortalLogic {
         UUID id = player.getUUID();
         Object current = player.level().dimension();
         Object last = LAST_DIM.get(id);
-        int age = player.tickCount;
 
-        expire(PENDING_END, id, age, 100);
-        expire(PENDING_NETHER, id, age, 200);
-
-        // Clear one-contact sound state only after portal collision callbacks have stopped
-        // for a short grace period. This prevents the "sound on leaving" edge case where
-        // player tick runs before the final entityInside callback of the same contact.
         clearContactStateIfExpired(id, END_LAST_CONTACT_AT, END_FAIL_SOUND_SENT, END_NOTICE_AT);
         clearContactStateIfExpired(id, NETHER_LAST_CONTACT_AT, NETHER_FAIL_SOUND_SENT, NETHER_NOTICE_AT);
 
@@ -95,21 +87,11 @@ public final class ReflectPortalLogic {
             }
         }
 
-        if (last == Level.OVERWORLD && current == Level.END && PENDING_END.containsKey(id)) {
-            Item item = getItemOrAir(PortalLockConfig.DATA.end_item);
-            if (PortalLockConfig.DATA.end_amount > 0) consumeItem(player, item, PortalLockConfig.DATA.end_amount);
-            playConfiguredSound(player, PortalLockConfig.DATA.end_success_sound);
-            PENDING_END.remove(id);
+        if (current == Level.OVERWORLD && last == Level.END) {
+            END_FAIL_SOUND_SENT.remove(id);
         }
-        if (last == Level.OVERWORLD && current == Level.NETHER && PENDING_NETHER.containsKey(id)) {
-            Item item = getItemOrAir(PortalLockConfig.DATA.nether_item);
-            if (PortalLockConfig.DATA.nether_amount > 0) consumeItem(player, item, PortalLockConfig.DATA.nether_amount);
-            playConfiguredSound(player, PortalLockConfig.DATA.nether_success_sound);
-            PENDING_NETHER.remove(id);
-        }
-        if (current == Level.OVERWORLD && last == Level.END) PENDING_END.remove(id);
         if (current == Level.OVERWORLD && last == Level.NETHER) {
-            PENDING_NETHER.remove(id);
+            NETHER_FAIL_SOUND_SENT.remove(id);
             markNetherReturnSilent(id);
         }
         LAST_DIM.put(id, current);
@@ -117,6 +99,14 @@ public final class ReflectPortalLogic {
 
     public static void onNetherPortalInside(Object levelObj, Object posObj, Object entityObj, CallbackInfo ci) {
         if (!(levelObj instanceof Level level) || level.isClientSide()) return;
+
+        if (entityObj instanceof net.minecraft.world.entity.item.ItemEntity itemEntity) {
+            if (isBlockedItemEntity(itemEntity)) {
+                ci.cancel();
+                return;
+            }
+        }
+
         ServerPlayer player = findPlayer(entityObj);
         if (player == null) return;
         if (player.level().dimension() != Level.OVERWORLD || !PortalLockConfig.DATA.nether_enabled) return;
@@ -127,52 +117,47 @@ public final class ReflectPortalLogic {
             markNetherReturnSilent(id);
         }
         if (isNetherReturnSilent(id)) {
-            // Player has just returned from Nether and is still inside the arrival portal.
-            // Keep protection alive while collision callbacks continue, and clear it only
-            // after several consecutive non-contact ticks. This avoids the creative-mode
-            // edge case where one tick briefly reports no contact while vanilla is still
-            // able to rebuild the portal manager and bounce the player back.
             markNetherReturnSilent(id);
             NETHER_RETURN_MISS_TICKS.remove(id);
-            PENDING_NETHER.remove(id);
             ci.cancel();
             return;
         }
 
-        Item required = getItemOrAir(PortalLockConfig.DATA.nether_item);
-        int amount = requiredHoldingAmount(PortalLockConfig.DATA.nether_amount);
-        if (countItem(player, required) < amount) {
+        String blocked = hasBlockedItem(player, PortalLockConfig.DATA.blocked_items);
+        if (blocked != null) {
             boolean showMessage = shouldNotifyWithCooldown(NETHER_NOTICE_AT, id);
             boolean playSound = NETHER_FAIL_SOUND_SENT.add(id);
-            if (showMessage || playSound) sendNetherDenied(player, playSound);
-            PENDING_NETHER.remove(id);
+            if (showMessage || playSound) sendBlockedDenied(player, blocked, playSound);
             ci.cancel();
             return;
         }
         NETHER_FAIL_SOUND_SENT.remove(id);
         NETHER_NOTICE_AT.remove(id);
         NETHER_LAST_CONTACT_AT.remove(id);
-        PENDING_NETHER.put(id, player.tickCount);
     }
 
     public static void onEndPortalInside(Object levelObj, Object posObj, Object entityObj, CallbackInfo ci) {
         if (!(levelObj instanceof Level level) || level.isClientSide()) return;
+
+        if (entityObj instanceof net.minecraft.world.entity.item.ItemEntity itemEntity) {
+            if (isBlockedItemEntity(itemEntity)) {
+                ci.cancel();
+                return;
+            }
+        }
+
         ServerPlayer player = findPlayer(entityObj);
         if (player == null) return;
         if (player.level().dimension() != Level.OVERWORLD || !PortalLockConfig.DATA.end_enabled) return;
 
-        Item required = getItemOrAir(PortalLockConfig.DATA.end_item);
-        int amount = requiredHoldingAmount(PortalLockConfig.DATA.end_amount);
         UUID id = player.getUUID();
         markContact(END_LAST_CONTACT_AT, id);
-        if (countItem(player, required) < amount) {
-            // Match the finalized 1.21.x behavior: cancel every callback, but only
-            // show the denial once for the same real contact.  The tick path clears
-            // this flag only after the player is no longer touching the End portal.
+
+        String blocked = hasBlockedItem(player, PortalLockConfig.DATA.blocked_items);
+        if (blocked != null) {
             if (PortalLockEndState.markFailNotice(id)) {
-                sendEndDenied(player, true);
+                sendBlockedDenied(player, blocked, true);
             }
-            PENDING_END.remove(id);
             ci.cancel();
             return;
         }
@@ -180,7 +165,6 @@ public final class ReflectPortalLogic {
         END_FAIL_SOUND_SENT.remove(id);
         END_NOTICE_AT.remove(id);
         END_LAST_CONTACT_AT.remove(id);
-        PENDING_END.put(id, player.tickCount);
     }
 
     private static ServerPlayer findPlayer(Object entityObj) {
@@ -235,11 +219,6 @@ public final class ReflectPortalLogic {
         return true;
     }
 
-    private static void expire(Map<UUID, Integer> map, UUID id, int age, int maxAge) {
-        Integer start = map.get(id);
-        if (start != null && age - start > maxAge) map.remove(id);
-    }
-
     private static final int PORTAL_NONE = 0;
     private static final int PORTAL_NETHER = 1;
     private static final int PORTAL_END = 2;
@@ -272,10 +251,6 @@ public final class ReflectPortalLogic {
         return PORTAL_NONE;
     }
 
-    public static int requiredHoldingAmount(int configuredAmount) {
-        return configuredAmount <= 0 ? 1 : configuredAmount;
-    }
-
     public static int countItem(Object playerObj, Object itemObj) {
         if (!(playerObj instanceof ServerPlayer player) || !(itemObj instanceof Item item) || item == Items.AIR) return 0;
         Container inv = player.getInventory();
@@ -287,93 +262,38 @@ public final class ReflectPortalLogic {
         return total;
     }
 
-    public static void consumeItem(Object playerObj, Object itemObj, int amount) {
-        if (!(playerObj instanceof ServerPlayer player) || !(itemObj instanceof Item item) || item == Items.AIR || amount <= 0) return;
+    public static String hasBlockedItem(ServerPlayer player, java.util.List<String> blockedIds) {
+        if (blockedIds == null || blockedIds.isEmpty()) return null;
         Container inv = player.getInventory();
-        int remaining = amount;
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            ItemStack stack = inv.getItem(i);
-            if (!stack.is(item)) continue;
-            int remove = Math.min(stack.getCount(), remaining);
-            stack.shrink(remove);
-            remaining -= remove;
-            if (remaining <= 0) return;
-        }
-    }
-
-    public static Item getItemOrAir(String id) {
-        String normalized = normalizeItemId(id);
-
-        // 26.x uses Mojang names and the old Yarn Registries.ITEM API is not available.
-        // Do not limit lookup to vanilla Items fields: iterate the live item registry and
-        // compare each registered item's key string so modded item IDs such as
-        // other_mod:custom_key work the same way as the 1.20.1/1.21.1 builds.
-        Item registered = getItemFromLiveRegistry(normalized);
-        if (registered != null) return registered;
-
-        // Fallback for vanilla fields if the registry lookup shape changes.
-        Item vanilla = getVanillaItemByField(normalized);
-        return vanilla == null ? Items.AIR : vanilla;
-    }
-
-    private static Item getItemFromLiveRegistry(String id) {
-        try {
-            Class<?> builtIn = Class.forName("net.minecraft.core.registries.BuiltInRegistries");
-            Field itemField = builtIn.getField("ITEM");
-            Object registry = itemField.get(null);
-            if (registry == null) return null;
-
-            // Preferred path: registries are usually Iterable<Item>. This avoids needing
-            // ResourceLocation/Identifier classes, whose names changed in 26.x.
-            if (registry instanceof Iterable<?> iterable) {
-                for (Object candidate : iterable) {
-                    if (!(candidate instanceof Item item)) continue;
-                    if (matchesRegistryId(id, registryKeyString(registry, candidate))) return item;
-                }
+        for (String blockedId : blockedIds) {
+            Item blocked = getItemOrAir(blockedId);
+            if (blocked == Items.AIR) continue;
+            for (int i = 0; i < inv.getContainerSize(); i++) {
+                if (inv.getItem(i).is(blocked)) return blockedId;
             }
-
-            // Fallback path: some registry implementations expose entrySet().
-            Object entries = null;
-            try { entries = callAny(registry, new String[]{"entrySet"}); } catch (Throwable ignored) {}
-            if (entries instanceof Iterable<?> iterable) {
-                for (Object entryObj : iterable) {
-                    if (!(entryObj instanceof Map.Entry<?, ?> entry)) continue;
-                    Object value = entry.getValue();
-                    if (!(value instanceof Item item)) continue;
-                    if (matchesRegistryId(id, String.valueOf(entry.getKey()))) return item;
-                    if (matchesRegistryId(id, registryKeyString(registry, value))) return item;
-                }
-            }
-        } catch (Throwable ignored) {
         }
         return null;
     }
 
-    private static String registryKeyString(Object registry, Object value) {
-        if (registry == null || value == null) return "";
-        String[] names = {
-                "getKey",       // Mojang Registry#getKey(T)
-                "getResourceKey",
-                "getId"
-        };
-        for (String name : names) {
-            try {
-                Object key = callAny(registry, new String[]{name}, value);
-                if (key != null) return String.valueOf(key);
-            } catch (Throwable ignored) {
-            }
+    private static boolean isBlockedItemEntity(net.minecraft.world.entity.item.ItemEntity itemEntity) {
+        java.util.List<String> blockedIds = PortalLockConfig.DATA.blocked_items;
+        if (blockedIds == null || blockedIds.isEmpty()) return false;
+        Item item = itemEntity.getItem().getItem();
+        for (String blockedId : blockedIds) {
+            Item blocked = getItemOrAir(blockedId);
+            if (blocked != Items.AIR && item == blocked) return true;
         }
-        return "";
+        return false;
     }
 
-    private static boolean matchesRegistryId(String expected, String actual) {
-        if (expected == null || actual == null) return false;
-        String a = actual.trim();
-        if (a.equals(expected)) return true;
-        // ResourceKey string formats can look like:
-        // ResourceKey[minecraft:item / namespace:path]
-        // or simply contain namespace:path inside a wrapper.
-        return a.endsWith("/ " + expected + "]") || a.contains(expected);
+    public static Item getItemOrAir(String id) {
+        String normalized = normalizeItemId(id);
+        try {
+            ResourceLocation loc = new ResourceLocation(normalized);
+            return BuiltInRegistries.ITEM.get(loc);
+        } catch (Throwable e) {
+            return Items.AIR;
+        }
     }
 
     private static String normalizeItemId(String id) {
@@ -382,44 +302,14 @@ public final class ReflectPortalLogic {
         return trimmed.contains(":") ? trimmed : "minecraft:" + trimmed;
     }
 
-    private static Item getVanillaItemByField(String id) {
-        try {
-            if (!id.startsWith("minecraft:")) return null;
-            String path = id.substring("minecraft:".length()).toUpperCase(Locale.ROOT);
-            Field f = Items.class.getField(path);
-            Object v = f.get(null);
-            return v instanceof Item item ? item : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
-    }
 
-    public static void sendNetherDenied(Object player) {
-        sendNetherDenied(player, true);
-    }
-
-    public static void sendNetherDenied(Object player, boolean playSound) {
-        sendLocalized(player, "nether-denied", PortalLockConfig.DATA.nether_message,
-                "&eYou need &c%item%&e to enter the Nether!", PortalLockConfig.DATA.nether_item,
-                PortalLockConfig.DATA.nether_overlay, PortalLockConfig.DATA.nether_fail_sound, playSound);
-    }
-
-    public static void sendEndDenied(Object player) {
-        sendEndDenied(player, true);
-    }
-
-    public static void sendEndDenied(Object player, boolean playSound) {
-        sendLocalized(player, "end-denied", PortalLockConfig.DATA.end_message,
-                "&dYou need &c%item%&d to enter the End!", PortalLockConfig.DATA.end_item,
-                PortalLockConfig.DATA.end_overlay, PortalLockConfig.DATA.end_fail_sound, playSound);
-    }
-
-    private static void sendLocalized(Object playerObj, String langKey, String configured, String fallback, String itemId, boolean overlay, String soundId, boolean playSound) {
-        if (!(playerObj instanceof ServerPlayer player)) return;
-        String template = PortalLockLang.getMessageTemplate(player, langKey, configured, fallback);
-        Component message = buildMessageComponent(template, itemId);
-        sendMessage(player, message, overlay);
-        if (playSound) playConfiguredSound(player, soundId);
+    public static void sendBlockedDenied(Object player, String blockedItemId, boolean playSound) {
+        if (!(player instanceof ServerPlayer p)) return;
+        String template = PortalLockLang.getMessageTemplate(p, "blocked-denied", PortalLockConfig.DATA.blocked_message,
+                "&cYou cannot enter while carrying &e%item%&c!");
+        Component message = buildMessageComponent(template, blockedItemId);
+        sendMessage(p, message, PortalLockConfig.DATA.blocked_overlay);
+        if (playSound) playConfiguredSound(p, PortalLockConfig.DATA.blocked_fail_sound);
     }
 
     private static void sendMessage(ServerPlayer player, Component component, boolean overlay) {
