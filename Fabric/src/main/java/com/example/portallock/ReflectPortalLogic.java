@@ -109,6 +109,28 @@ public final class ReflectPortalLogic {
 
         ServerPlayer player = findPlayer(entityObj);
         if (player == null) return;
+
+        BlockPos pos = posObj instanceof BlockPos bp ? bp : null;
+        if (pos != null && PortalLockConfig.DATA.admin_activation) {
+            String dimKey = level.dimension().location().toString();
+            if (!PortalLockActivationState.isActivated(pos.getX(), pos.getY(), pos.getZ(), dimKey, PortalLockConfig.DATA.activation_radius)) {
+                boolean showMessage = shouldNotifyWithCooldown(NETHER_NOTICE_AT, player.getUUID());
+                if (showMessage) sendPortalDenied(player);
+                ci.cancel();
+                return;
+            }
+        }
+
+        String blocked = hasBlockedItem(player, PortalLockConfig.DATA.blocked_items);
+        if (blocked != null) {
+            UUID id = player.getUUID();
+            boolean showMessage = shouldNotifyWithCooldown(NETHER_NOTICE_AT, id);
+            boolean playSound = NETHER_FAIL_SOUND_SENT.add(id);
+            if (showMessage || playSound) sendBlockedDenied(player, blocked, playSound);
+            ci.cancel();
+            return;
+        }
+
         if (player.level().dimension() != Level.OVERWORLD || !PortalLockConfig.DATA.nether_enabled) return;
 
         UUID id = player.getUUID();
@@ -119,15 +141,6 @@ public final class ReflectPortalLogic {
         if (isNetherReturnSilent(id)) {
             markNetherReturnSilent(id);
             NETHER_RETURN_MISS_TICKS.remove(id);
-            ci.cancel();
-            return;
-        }
-
-        String blocked = hasBlockedItem(player, PortalLockConfig.DATA.blocked_items);
-        if (blocked != null) {
-            boolean showMessage = shouldNotifyWithCooldown(NETHER_NOTICE_AT, id);
-            boolean playSound = NETHER_FAIL_SOUND_SENT.add(id);
-            if (showMessage || playSound) sendBlockedDenied(player, blocked, playSound);
             ci.cancel();
             return;
         }
@@ -148,19 +161,34 @@ public final class ReflectPortalLogic {
 
         ServerPlayer player = findPlayer(entityObj);
         if (player == null) return;
-        if (player.level().dimension() != Level.OVERWORLD || !PortalLockConfig.DATA.end_enabled) return;
 
-        UUID id = player.getUUID();
-        markContact(END_LAST_CONTACT_AT, id);
+        BlockPos pos = posObj instanceof BlockPos bp ? bp : null;
+        if (pos != null && PortalLockConfig.DATA.admin_activation) {
+            String dimKey = level.dimension().location().toString();
+            if (!PortalLockActivationState.isActivated(pos.getX(), pos.getY(), pos.getZ(), dimKey, PortalLockConfig.DATA.activation_radius)) {
+                if (PortalLockEndState.markFailNotice(player.getUUID())) {
+                    sendPortalDenied(player);
+                }
+                ci.cancel();
+                return;
+            }
+        }
 
         String blocked = hasBlockedItem(player, PortalLockConfig.DATA.blocked_items);
         if (blocked != null) {
+            UUID id = player.getUUID();
+            markContact(END_LAST_CONTACT_AT, id);
             if (PortalLockEndState.markFailNotice(id)) {
                 sendBlockedDenied(player, blocked, true);
             }
             ci.cancel();
             return;
         }
+
+        if (player.level().dimension() != Level.OVERWORLD || !PortalLockConfig.DATA.end_enabled) return;
+
+        UUID id = player.getUUID();
+        markContact(END_LAST_CONTACT_AT, id);
         PortalLockEndState.clearFailNotice(id);
         END_FAIL_SOUND_SENT.remove(id);
         END_NOTICE_AT.remove(id);
@@ -310,6 +338,19 @@ public final class ReflectPortalLogic {
         Component message = buildMessageComponent(template, blockedItemId);
         sendMessage(p, message, PortalLockConfig.DATA.blocked_overlay);
         if (playSound) playConfiguredSound(p, PortalLockConfig.DATA.blocked_fail_sound);
+    }
+
+    private static void sendPortalDenied(ServerPlayer player) {
+        String template = PortalLockLang.getMessageTemplate(player, "portal-denied", PortalLockConfig.DATA.portal_denied_message,
+                "&cThis portal has not been activated by an admin!");
+        Component message = Component.literal(template.replace("&0", "\u00a70").replace("&1", "\u00a71")
+                .replace("&2", "\u00a72").replace("&3", "\u00a73").replace("&4", "\u00a74")
+                .replace("&5", "\u00a75").replace("&6", "\u00a76").replace("&7", "\u00a77")
+                .replace("&8", "\u00a78").replace("&9", "\u00a79").replace("&a", "\u00a7a")
+                .replace("&b", "\u00a7b").replace("&c", "\u00a7c").replace("&d", "\u00a7d")
+                .replace("&e", "\u00a7e").replace("&f", "\u00a7f").replace("&r", "\u00a7r"));
+        sendMessage(player, message, true);
+        playConfiguredSound(player, PortalLockConfig.DATA.blocked_fail_sound);
     }
 
     private static void sendMessage(ServerPlayer player, Component component, boolean overlay) {

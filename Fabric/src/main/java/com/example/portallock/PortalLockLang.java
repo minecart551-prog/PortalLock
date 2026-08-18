@@ -192,9 +192,11 @@ public final class PortalLockLang {
         switch (normalizeLocale(locale)) {
             case "ja_jp" -> {
                 map.put("blocked-denied", "&c&c%item%&cを持っている間は入場できません！");
+                map.put("portal-denied", "&cこのポータルは管理者によって有効化されていません！");
             }
             default -> {
                 map.put("blocked-denied", "&cYou cannot enter while carrying &e%item%&c!");
+                map.put("portal-denied", "&cThis portal has not been activated by an admin!");
             }
         }
         return map;

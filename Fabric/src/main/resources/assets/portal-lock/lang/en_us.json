@@ -1,5 +1,6 @@
 {
   "blocked-denied": "&cYou cannot enter while carrying &e%item%&c!",
+  "portal-denied": "&cThis portal has not been activated by an admin!",
   "modmenu.nameTranslation.portal-lock": "Portal Lock",
   "modmenu.descriptionTranslation.portal-lock": "Blocks portal entry when carrying certain items.",
   "portal-lock.description": "Blocks portal entry when carrying certain items.",

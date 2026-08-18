@@ -40,6 +40,10 @@ public class PortalLockConfig {
         public float volume = 1.0f;
         public float pitch = 1.2f;
 
+        public boolean admin_activation = false;
+        public int activation_radius = 16;
+        public String portal_denied_message = "";
+
         public String language_mode = "auto";
         public String fixed_language = "en_us";
         public String fallback_language = "en_us";
@@ -238,6 +242,10 @@ public class PortalLockConfig {
         data.volume = parseFloat(values.get("volume"), data.volume);
         data.pitch = parseFloat(values.get("pitch"), data.pitch);
 
+        data.admin_activation = parseBoolean(values.get("admin_activation"), data.admin_activation);
+        data.activation_radius = parseInt(values.get("activation_radius"), data.activation_radius);
+        data.portal_denied_message = values.getOrDefault("portal_denied_message", data.portal_denied_message);
+
         data.language_mode = values.getOrDefault("language_mode", data.language_mode);
         data.fixed_language = values.getOrDefault("fixed_language", data.fixed_language);
         data.fallback_language = values.getOrDefault("fallback_language", data.fallback_language);
@@ -331,6 +339,17 @@ public class PortalLockConfig {
         }
     }
 
+    private static int parseInt(String value, int fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
     private static String normalizeLocale(String locale) {
         if (locale == null || locale.isBlank()) {
             return "en_us";
@@ -407,6 +426,21 @@ public class PortalLockConfig {
         sb.append(writeFloat("pitch", DATA.pitch));
         sb.append("\n");
 
+        sb.append("# Require admin activation for portals to work.\n");
+        sb.append("# When enabled, portals show visuals but block teleportation until an admin activates them.\n");
+        sb.append("# Use /pl activate and /pl deactivate commands.\n");
+        sb.append(writeBoolean("admin_activation", DATA.admin_activation));
+        sb.append("\n");
+
+        sb.append("# Radius (in blocks) to check for activated portals.\n");
+        sb.append(writeInt("activation_radius", DATA.activation_radius));
+        sb.append("\n");
+
+        sb.append("# Message shown when a portal is not activated.\n");
+        sb.append("# Leave blank to use language files automatically.\n");
+        sb.append(writeString("portal_denied_message", DATA.portal_denied_message));
+        sb.append("\n");
+
         sb.append("# Language mode: auto or fixed.\n");
         sb.append(writeString("language_mode", DATA.language_mode));
         sb.append("\n");
@@ -447,6 +481,10 @@ public class PortalLockConfig {
         if (value == (long) value) {
             return key + ": " + (long) value + ".0\n";
         }
+        return key + ": " + value + "\n";
+    }
+
+    private static String writeInt(String key, int value) {
         return key + ": " + value + "\n";
     }
 
